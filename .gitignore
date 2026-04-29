@@ -80,3 +80,10 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Datasets and Large Files
+data/
+*.zip
+*.pth
+*.log
+outputs/
