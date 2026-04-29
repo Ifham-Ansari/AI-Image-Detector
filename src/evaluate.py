@@ -34,15 +34,16 @@ def calculate_metrics(model, dataloader, device: str) -> dict:
     preds = []
     probas = []
     with torch.no_grad():
-        for batch in dataloader:
-            inputs, targets, _ = _unpack_batch(batch)
-            inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
-            probabilities = F.softmax(outputs, dim=1)[:, 1]
-            predictions = outputs.argmax(dim=1)
-            true_labels.extend(targets.cpu().tolist())
-            preds.extend(predictions.cpu().tolist())
-            probas.extend(probabilities.cpu().tolist())
+        with torch.cuda.amp.autocast():
+            for batch in dataloader:
+                inputs, targets, _ = _unpack_batch(batch)
+                inputs, targets = inputs.to(device), targets.to(device)
+                outputs = model(inputs)
+                probabilities = F.softmax(outputs, dim=1)[:, 1]
+                predictions = outputs.argmax(dim=1)
+                true_labels.extend(targets.cpu().tolist())
+                preds.extend(predictions.cpu().tolist())
+                probas.extend(probabilities.cpu().tolist())
 
     metrics = {
         "accuracy": accuracy_score(true_labels, preds),

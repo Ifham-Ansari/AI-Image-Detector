@@ -61,35 +61,32 @@ def _get_batch(batch):
         return batch[0], batch[1]
     return batch
 
-def train_epoch(model, dataloader, criterion, optimizer, device):
+def train_epoch(model, dataloader, criterion, optimizer, device, scaler):
     model.train()
     running_loss = 0.0
     progress_bar = tqdm(dataloader, desc="Train", leave=False)
     
     try:
         for i, batch in enumerate(progress_bar):
-            if i == 0:
-                logger.info("Processing first batch...")
-            
             inputs, targets = _get_batch(batch)
             inputs, targets = inputs.to(device), targets.to(device)
             
-            if i == 0:
-                logger.info(f"Batch {i}: inputs shape={inputs.shape}, targets shape={targets.shape}")
-            
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            loss.backward()
-            optimizer.step()
+            
+            # Use Mixed Precision (AMP)
+            with torch.cuda.amp.autocast():
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+            
+            # Scale loss and step optimizer
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             
             running_loss += loss.item() * inputs.size(0)
             
             if i % 10 == 0:
                 progress_bar.set_postfix(batch=i, loss=loss.item())
-            
-            if i == 0:
-                logger.info(f"Batch {i} completed successfully.")
                 
     except Exception as e:
         logger.error(f"Error during training epoch: {str(e)}")
@@ -102,12 +99,13 @@ def validate_epoch(model, dataloader, criterion, device):
     model.eval()
     running_loss = 0.0
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Valid", leave=False):
-            inputs, targets = _get_batch(batch)
-            inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            running_loss += loss.item() * inputs.size(0)
+        with torch.cuda.amp.autocast():
+            for batch in tqdm(dataloader, desc="Valid", leave=False):
+                inputs, targets = _get_batch(batch)
+                inputs, targets = inputs.to(device), targets.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+                running_loss += loss.item() * inputs.size(0)
     return running_loss / len(dataloader.dataset)
 
 def save_checkpoint(state: dict, filename: Path) -> None:
@@ -133,6 +131,9 @@ def train_model():
         criterion = nn.CrossEntropyLoss()
         optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
         scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS)
+        
+        # Initialize Gradient Scaler for AMP
+        scaler = torch.cuda.amp.GradScaler()
 
         best_auc = 0.0
         patience = PATIENCE
@@ -142,7 +143,7 @@ def train_model():
         for epoch in range(1, EPOCHS + 1):
             logger.info(f"Epoch {epoch}/{EPOCHS}")
             
-            train_loss = train_epoch(model, loaders["train"], criterion, optimizer, DEVICE)
+            train_loss = train_epoch(model, loaders["train"], criterion, optimizer, DEVICE, scaler)
             valid_loss = validate_epoch(model, loaders["valid"], criterion, DEVICE)
             valid_metrics = calculate_metrics(model, loaders["valid"], DEVICE)
             scheduler.step()
